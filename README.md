@@ -89,6 +89,13 @@ py -m pip install paramiko
 The script performs GLPI exploitation, database credential extraction, hash
 recovery, SSH login, and the final privilege escalation.
 
+## Manual Exploit Assets
+
+The manual GLPI PoC files are included as `rce.py` and `shell.php.old`.
+The payload uses the `.old` extension because some upload systems reject ZIP
+archives containing `.php` files. `rce.py` automatically uses `shell.php.old`
+when `shell.php` is not present.
+
 ## Scope
 
 Rules:

