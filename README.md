@@ -1,5 +1,7 @@
 # HelpForge
 
+Repository: https://github.com/Ar0wx/helpforge
+
 ByteWise Solutions used to run a small managed IT helpdesk platform named
 HelpForge. The server is still online after the company dissolved. Your goal is
 to assess the machine from the outside and recover both flags.
