@@ -73,16 +73,17 @@ vagrant destroy -f
 
 The autosolve script executes the full intended solution path:
 
+Linux, macOS, or Git Bash:
+
 ```bash
 ./solve.sh 192.168.56.102
 ```
 
-On native Windows Python, install the SSH dependency first and run the script
-directly:
+Windows PowerShell or CMD:
 
 ```powershell
 py -m pip install paramiko
-py autosolve.py 192.168.56.102
+.\solve.bat 192.168.56.102
 ```
 
 The script performs GLPI exploitation, database credential extraction, hash
