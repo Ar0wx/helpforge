@@ -47,6 +47,18 @@ The audit role enables additional logging for detection-engineering exercises:
 ./audit.sh
 ```
 
+## Autosolve
+
+The repository includes an autosolve script for the final solution chain:
+
+```bash
+./solve.sh 192.168.56.102
+```
+
+The script performs the intended path automatically: GLPI CVE exploitation,
+database credential extraction, `techops` hash recovery, FTP wordlist cracking,
+SSH login, and `sudo less` privilege escalation.
+
 ## Secure Everything Else / Version Stability
 
 The challenge intentionally keeps GLPI at version 10.0.9 for
