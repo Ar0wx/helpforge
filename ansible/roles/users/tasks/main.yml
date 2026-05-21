@@ -1,0 +1,28 @@
+---
+- name: Create challenge user techops
+  ansible.builtin.user:
+    name: "{{ techops_name }}"
+    comment: "HelpForge Technician"
+    shell: /bin/bash
+    password: "{{ techops_password | password_hash('sha512') }}"
+    create_home: yes
+    state: present
+
+- name: Ensure techops is NOT in privileged groups
+  ansible.builtin.command: "gpasswd -d {{ techops_name }} {{ item }}"
+  loop:
+    - sudo
+    - adm
+    - wheel
+  register: remove_privileged_groups
+  failed_when: false
+  changed_when: "'Removing user' in remove_privileged_groups.stdout"
+
+- name: Ensure decoy users do not exist
+  ansible.builtin.user:
+    name: "{{ item }}"
+    state: absent
+    remove: yes
+  loop:
+    - m.keller
+    - mkeller

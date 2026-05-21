@@ -1,0 +1,35 @@
+---
+- name: Create GLPI log directory
+  ansible.builtin.file:
+    path: /var/log/glpi
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Seed GLPI log file with more than 250 lines
+  ansible.builtin.shell: |
+    {
+      cat <<'HEADER'
+    [2024-01-15 08:42:11] INFO: GLPI 10.0.9 daemon started
+    [2024-01-15 08:42:12] INFO: Database connection pool initialised
+    [2024-01-15 08:43:01] INFO: User 'glpi' login from 192.168.10.41
+    [2024-01-15 08:51:33] INFO: Ticket #1042 opened by techops
+    [2024-01-15 08:55:18] INFO: Ticket #1042 assigned to group 'L1 Support'
+    [2024-01-15 09:02:44] INFO: Ticket #1042 status changed to 'in_progress'
+    HEADER
+      for i in $(seq 1 260); do
+        case $((i % 5)) in
+          0) MSG="INFO: Ticket #$((1000+i)) follow-up by techops" ;;
+          1) MSG="DEBUG: Inventory sync, $((20+i)) assets updated" ;;
+          2) MSG="INFO: Notification sent for ticket #$((1000+i))" ;;
+          3) MSG="WARN: SLA approaching for ticket #$((1000+i))" ;;
+          4) MSG="INFO: Backup completed, retention OK" ;;
+        esac
+        printf '[2024-01-15 09:%02d:%02d] %s\n' "$((i % 60))" "$(( (i*7) % 60 ))" "$MSG"
+      done
+    } > /var/log/glpi/helpforge.log
+    chown root:root /var/log/glpi/helpforge.log
+    chmod 0644 /var/log/glpi/helpforge.log
+  args:
+    creates: /var/log/glpi/helpforge.log

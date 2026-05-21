@@ -1,0 +1,256 @@
+---
+- name: Install PHP, Apache and MySQL packages
+  ansible.builtin.apt:
+    name:
+      - apache2
+      - libapache2-mod-php8.1
+      - mysql-server
+      - php8.1
+      - php8.1-bz2
+      - php8.1-cli
+      - php8.1-curl
+      - php8.1-gd
+      - php8.1-intl
+      - php8.1-ldap
+      - php8.1-mbstring
+      - php8.1-mysql
+      - php8.1-xml
+      - php8.1-zip
+    state: present
+
+- name: Start Apache and MySQL
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: started
+    enabled: yes
+  loop:
+    - apache2
+    - mysql
+
+- name: Wait for MySQL socket to be ready
+  ansible.builtin.wait_for:
+    path: /var/run/mysqld/mysqld.sock
+    state: present
+    timeout: 60
+
+- name: Tune PHP for GLPI
+  ansible.builtin.lineinfile:
+    path: /etc/php/8.1/apache2/php.ini
+    regexp: "^{{ item.key }}\\s*="
+    line: "{{ item.key }} = {{ item.value }}"
+  loop:
+    - { key: "session.cookie_httponly", value: "on" }
+    - { key: "memory_limit", value: "256M" }
+    - { key: "upload_max_filesize", value: "20M" }
+    - { key: "post_max_size", value: "20M" }
+    - { key: "max_execution_time", value: "600" }
+  notify: restart apache2
+
+- name: Bind MySQL to localhost only
+  ansible.builtin.lineinfile:
+    path: /etc/mysql/mysql.conf.d/mysqld.cnf
+    regexp: '^bind-address\s*='
+    line: 'bind-address = 127.0.0.1'
+    insertafter: '^\[mysqld\]'
+  notify: restart mysql
+
+- name: Flush handlers before database setup
+  ansible.builtin.meta: flush_handlers
+
+- name: Set MySQL root password
+  ansible.builtin.shell: |
+    mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '{{ mysql_root_password }}'; FLUSH PRIVILEGES;"
+  args:
+    creates: /root/.helpforge_mysql_root_set
+  register: mysql_root_pw
+
+- name: Mark MySQL root password as configured
+  ansible.builtin.file:
+    path: /root/.helpforge_mysql_root_set
+    state: touch
+  when: mysql_root_pw is not skipped
+
+- name: mysql_secure_installation equivalent
+  ansible.builtin.shell: |
+    mysql -u root -p'{{ mysql_root_password }}' <<'SQL'
+    DELETE FROM mysql.user WHERE User='';
+    DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost','127.0.0.1','::1');
+    DROP DATABASE IF EXISTS test;
+    DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
+    FLUSH PRIVILEGES;
+    SQL
+  args:
+    creates: /root/.helpforge_mysql_secured
+
+- name: Mark MySQL as secured
+  ansible.builtin.file:
+    path: /root/.helpforge_mysql_secured
+    state: touch
+
+- name: Create GLPI database and database user without FILE privilege
+  ansible.builtin.shell: |
+    mysql -u root -p'{{ mysql_root_password }}' <<'SQL'
+    CREATE DATABASE IF NOT EXISTS {{ glpi_db_name }} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    CREATE USER IF NOT EXISTS '{{ glpi_db_user }}'@'localhost' IDENTIFIED BY '{{ glpi_db_password }}';
+    GRANT SELECT, INSERT, UPDATE, DELETE,
+          CREATE, ALTER, DROP, INDEX, REFERENCES,
+          LOCK TABLES, CREATE TEMPORARY TABLES,
+          CREATE VIEW, SHOW VIEW,
+          EXECUTE, TRIGGER, CREATE ROUTINE, ALTER ROUTINE
+      ON {{ glpi_db_name }}.* TO '{{ glpi_db_user }}'@'localhost';
+    FLUSH PRIVILEGES;
+    SQL
+  args:
+    creates: /root/.helpforge_glpi_db_created
+
+- name: Mark GLPI database as created
+  ansible.builtin.file:
+    path: /root/.helpforge_glpi_db_created
+    state: touch
+
+- name: Download GLPI 10.0.9 with optional checksum
+  ansible.builtin.get_url:
+    url: https://github.com/glpi-project/glpi/releases/download/10.0.9/glpi-10.0.9.tgz
+    dest: /tmp/glpi-10.0.9.tgz
+    mode: '0644'
+    checksum: "{{ glpi_checksum if glpi_checksum else omit }}"
+
+- name: Extract GLPI
+  ansible.builtin.unarchive:
+    src: /tmp/glpi-10.0.9.tgz
+    dest: /var/www/
+    remote_src: yes
+    creates: /var/www/glpi/public/index.php
+
+- name: Set GLPI ownership
+  ansible.builtin.file:
+    path: /var/www/glpi
+    owner: www-data
+    group: www-data
+    recurse: yes
+
+- name: Deploy Apache vhost for HelpForge
+  ansible.builtin.copy:
+    dest: /etc/apache2/sites-available/helpforge.conf
+    content: |
+      <VirtualHost *:80>
+          ServerName helpforge
+          DocumentRoot /var/www/glpi/public
+
+          <Directory /var/www/glpi/public>
+              Options -Indexes +FollowSymLinks
+              AllowOverride All
+              Require all granted
+
+              RewriteEngine On
+              RewriteCond %{REQUEST_FILENAME} !-f
+              RewriteRule ^(.*)$ index.php [QSA,L]
+          </Directory>
+
+          ErrorLog ${APACHE_LOG_DIR}/helpforge-error.log
+          CustomLog ${APACHE_LOG_DIR}/helpforge-access.log combined
+      </VirtualHost>
+    mode: '0644'
+  notify: restart apache2
+
+- name: Enable PHP Apache module explicitly
+  ansible.builtin.command: a2enmod php8.1
+  args:
+    creates: /etc/apache2/mods-enabled/php8.1.load
+  notify: restart apache2
+
+- name: Enable Apache rewrite module
+  ansible.builtin.command: a2enmod rewrite
+  args:
+    creates: /etc/apache2/mods-enabled/rewrite.load
+  notify: restart apache2
+
+- name: Enable Apache headers module
+  ansible.builtin.command: a2enmod headers
+  args:
+    creates: /etc/apache2/mods-enabled/headers.load
+  notify: restart apache2
+
+- name: Disable default Apache site
+  ansible.builtin.command: a2dissite 000-default.conf
+  args:
+    removes: /etc/apache2/sites-enabled/000-default.conf
+  notify: restart apache2
+
+- name: Enable HelpForge site
+  ansible.builtin.command: a2ensite helpforge.conf
+  args:
+    creates: /etc/apache2/sites-enabled/helpforge.conf
+  notify: restart apache2
+
+- name: Flush Apache handlers before GLPI install
+  ansible.builtin.meta: flush_handlers
+
+- name: Install GLPI via CLI
+  ansible.builtin.shell: |
+    sudo -u www-data php /var/www/glpi/bin/console db:install \
+      --db-host=localhost \
+      --db-name={{ glpi_db_name }} \
+      --db-user={{ glpi_db_user }} \
+      --db-password='{{ glpi_db_password }}' \
+      --default-language=en_GB \
+      --no-interaction \
+      --force
+  args:
+    creates: /var/www/glpi/config/config_db.php
+
+- name: Remove GLPI web installer
+  ansible.builtin.file:
+    path: /var/www/glpi/install/install.php
+    state: absent
+
+- name: Add GLPI version breadcrumb to public/index.php
+  ansible.builtin.lineinfile:
+    path: /var/www/glpi/public/index.php
+    insertbefore: BOF
+    line: '<!-- HelpForge maintenance build: GLPI 10.0.9 -->'
+
+- name: Add HTTP header breadcrumb as fallback
+  ansible.builtin.lineinfile:
+    path: /etc/apache2/sites-available/helpforge.conf
+    regexp: '^\s*Header set X-HelpForge-Build'
+    line: '    Header set X-HelpForge-Build "GLPI-10.0.9"'
+    insertafter: 'CustomLog'
+  notify: restart apache2
+
+- name: Generate GLPI bcrypt hash for techops
+  ansible.builtin.command: "php -r \"echo password_hash('{{ techops_password }}', PASSWORD_BCRYPT, ['cost' => 10]);\""
+  register: techops_bcrypt
+  changed_when: false
+  no_log: true
+
+- name: Create techops user in GLPI
+  ansible.builtin.shell: |
+    mysql -u root -p'{{ mysql_root_password }}' {{ glpi_db_name }} <<'SQL'
+    INSERT INTO glpi_users
+      (name, firstname, realname, password, authtype, auths_id, is_active, profiles_id, last_login)
+    VALUES
+      ('{{ techops_name }}', 'Tech', 'Operations',
+       '{{ techops_bcrypt.stdout }}', 1, 0, 1, 4, NOW())
+    ON DUPLICATE KEY UPDATE
+      password='{{ techops_bcrypt.stdout }}',
+      is_active=1;
+
+    SET @uid = (SELECT id FROM glpi_users WHERE name='{{ techops_name }}');
+    INSERT IGNORE INTO glpi_profiles_users
+      (users_id, profiles_id, entities_id, is_recursive, is_dynamic)
+    VALUES (@uid, 4, 0, 1, 0);
+
+    UPDATE glpi_users
+       SET is_active=0,
+           password='$2y$10$invalidinvalidinvalidinvalidinvalidinvalidinvalidinvalidinv'
+     WHERE name IN ('glpi', 'post-only', 'tech', 'normal');
+    SQL
+  args:
+    creates: /root/.helpforge_techops_glpi
+  no_log: true
+
+- name: Mark techops GLPI user as configured
+  ansible.builtin.file:
+    path: /root/.helpforge_techops_glpi
+    state: touch

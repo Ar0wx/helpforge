@@ -1,0 +1,171 @@
+---
+- name: Audit - find non-baseline SUID binaries
+  ansible.builtin.shell: |
+    set -o pipefail
+    find / -perm -4000 -type f -not -path '/proc/*' 2>/dev/null | \
+      grep -vE '^/usr/bin/(mount|umount|passwd|chsh|chfn|gpasswd|newgrp|su|sudo|pkexec)$' | \
+      grep -vE '^/usr/(lib|libexec)/(policykit-1/polkit-agent-helper-1|openssh/ssh-keysign|dbus-1\.0/dbus-daemon-launch-helper|snapd/snap-confine)$' | \
+      grep -vE '^/usr/sbin/(pppd|mount\.nfs)$' \
+      || true
+  args:
+    executable: /bin/bash
+  register: suid_audit
+  changed_when: false
+
+- name: Audit - report non-baseline SUID binaries
+  ansible.builtin.debug:
+    msg: "Non-baseline SUID detected: {{ suid_audit.stdout_lines }}"
+  when: suid_audit.stdout_lines | length > 0
+
+- name: Audit - techops group membership
+  ansible.builtin.command: groups techops
+  register: techops_groups
+  changed_when: false
+
+- name: Audit - fail if techops is in privileged groups
+  ansible.builtin.fail:
+    msg: "techops is in unintended group: {{ techops_groups.stdout }}"
+  when: techops_groups.stdout is search('\\b(sudo|adm|wheel|root)\\b')
+
+- name: Audit - techops sudo rule
+  ansible.builtin.command: sudo -l -U techops
+  register: techops_sudo
+  changed_when: false
+
+- name: Audit - verify sudo rule is exactly the intended one
+  ansible.builtin.fail:
+    msg: "techops sudo rule unexpected. Got:\n{{ techops_sudo.stdout }}"
+  when: "'NOPASSWD: /usr/bin/less /var/log/glpi/helpforge.log' not in techops_sudo.stdout"
+
+- name: Audit - writable web paths outside /var/www/glpi/files/
+  ansible.builtin.shell: |
+    find /var/www/glpi -writable -type d 2>/dev/null | \
+      grep -vE '^/var/www/glpi/files(/|$)' || true
+  register: web_writable
+  changed_when: false
+
+- name: Audit - report unexpected writable web paths
+  ansible.builtin.debug:
+    msg: "Unexpected writable directories under /var/www/glpi: {{ web_writable.stdout_lines }}"
+  when: web_writable.stdout_lines | length > 0
+
+- name: Audit - listening services
+  ansible.builtin.command: ss -tlnp
+  register: listeners
+  changed_when: false
+
+- name: Audit - show listening services
+  ansible.builtin.debug:
+    var: listeners.stdout_lines
+
+- name: Audit - fail if MySQL is externally reachable
+  ansible.builtin.fail:
+    msg: "MySQL is bound externally! Listeners:\n{{ listeners.stdout }}"
+  when:
+    - "'0.0.0.0:3306' in listeners.stdout or ':::3306' in listeners.stdout"
+
+- name: Test - decoy users do not exist
+  ansible.builtin.command: "getent passwd {{ item }}"
+  loop:
+    - m.keller
+    - mkeller
+  register: decoy_check
+  changed_when: false
+  failed_when: decoy_check.rc == 0
+
+- name: Test - techops exists
+  ansible.builtin.command: id techops
+  changed_when: false
+
+- name: Test - user.txt exists with correct permissions
+  ansible.builtin.stat:
+    path: "/home/{{ techops_name }}/user.txt"
+  register: user_flag_stat
+
+- name: Test - validate user.txt permissions
+  ansible.builtin.fail:
+    msg: "user.txt has wrong owner/mode: owner={{ user_flag_stat.stat.pw_name }} mode={{ user_flag_stat.stat.mode }}"
+  when: >
+    not user_flag_stat.stat.exists
+    or user_flag_stat.stat.pw_name != techops_name
+    or user_flag_stat.stat.mode != '0640'
+
+- name: Test - root.txt exists with correct permissions
+  ansible.builtin.stat:
+    path: /root/root.txt
+  register: root_flag_stat
+
+- name: Test - validate root.txt permissions
+  ansible.builtin.fail:
+    msg: "root.txt has wrong owner/mode: owner={{ root_flag_stat.stat.pw_name }} mode={{ root_flag_stat.stat.mode }}"
+  when: >
+    not root_flag_stat.stat.exists
+    or root_flag_stat.stat.pw_name != 'root'
+    or root_flag_stat.stat.mode != '0600'
+
+- name: Test - GLPI install.php has been removed
+  ansible.builtin.stat:
+    path: /var/www/glpi/install/install.php
+  register: install_php
+
+- name: Test - fail if install.php still present
+  ansible.builtin.fail:
+    msg: "GLPI install.php still present - this is an unintended path!"
+  when: install_php.stat.exists
+
+- name: Test - GLPI login page reachable on localhost
+  ansible.builtin.uri:
+    url: "http://127.0.0.1/"
+    return_content: yes
+    status_code: 200
+  register: glpi_http
+
+- name: Test - GLPI breadcrumb visible in response
+  ansible.builtin.fail:
+    msg: "GLPI breadcrumb missing in response body."
+  when: "'HelpForge maintenance build' not in glpi_http.content and 'GLPI' not in glpi_http.content"
+
+- name: Test - log file long enough for less to paginate
+  ansible.builtin.shell: wc -l < /var/log/glpi/helpforge.log
+  register: log_lines
+  changed_when: false
+
+- name: Test - fail if log is too short
+  ansible.builtin.fail:
+    msg: "/var/log/glpi/helpforge.log has only {{ log_lines.stdout }} lines, less will exit immediately."
+  when: log_lines.stdout | int < 200
+
+- name: Test - vsftpd serving anonymous FTP
+  ansible.builtin.command: systemctl is-active vsftpd
+  register: vsftpd_active
+  changed_when: false
+  failed_when: vsftpd_active.stdout != 'active'
+
+- name: Test - all three FTP decoy files exist
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - /srv/ftp/README.txt
+    - /srv/ftp/.old_creds.bak
+    - /srv/ftp/client_logs_2024.tar.gz
+  register: ftp_files
+
+- name: Test - fail if any FTP decoy file is missing
+  ansible.builtin.fail:
+    msg: "Missing FTP decoy file: {{ item.item }}"
+  loop: "{{ ftp_files.results }}"
+  when: not item.stat.exists
+
+- name: Test - client_logs_2024.tar.gz is a real gzip archive
+  ansible.builtin.shell: file /srv/ftp/client_logs_2024.tar.gz | grep -q gzip
+  changed_when: false
+
+- name: Test - wordlist inside tarball contains the challenge password
+  ansible.builtin.shell: |
+    tar -xzOf /srv/ftp/client_logs_2024.tar.gz client_logs_2024/helpforge_wordlist.txt | \
+      grep -qx "{{ techops_password }}"
+  changed_when: false
+
+- name: Verify recap
+  ansible.builtin.debug:
+    msg: "All verification checks passed."

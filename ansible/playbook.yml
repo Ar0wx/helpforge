@@ -1,0 +1,22 @@
+---
+- name: Provision HelpForge CTF Machine
+  hosts: all
+  become: yes
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+  roles:
+    - base
+    - users
+    - glpi
+    - ftp
+    - ssh
+    - sudoers
+    - logs
+    - flags
+    - harden
+    - role: verify
+      tags: ['verify', 'never']
+    - role: audit
+      tags: ['audit', 'never']
+    - role: cleanup
+      tags: ['cleanup', 'never']

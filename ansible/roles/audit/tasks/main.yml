@@ -1,0 +1,38 @@
+---
+- name: Install auditd
+  ansible.builtin.apt:
+    name:
+      - auditd
+      - audispd-plugins
+    state: present
+
+- name: Configure HelpForge audit rules
+  ansible.builtin.copy:
+    dest: /etc/audit/rules.d/helpforge.rules
+    mode: '0640'
+    content: |
+      -w /var/www/glpi/config/config_db.php -p r -k glpi_dbconfig_read
+      -w /etc/sudoers      -p wa -k sudoers_change
+      -w /etc/sudoers.d/   -p wa -k sudoers_change
+      -a always,exit -F arch=b64 -S execve -F euid=0 -k root_exec
+  notify: restart auditd
+
+- name: Enable auditd at boot
+  ansible.builtin.service:
+    name: auditd
+    state: started
+    enabled: yes
+
+- name: Enable MySQL general query log
+  ansible.builtin.shell: |
+    mysql -u root -p'{{ mysql_root_password }}' <<'SQL'
+    SET GLOBAL general_log_file='/var/log/mysql/general.log';
+    SET GLOBAL general_log='ON';
+    SQL
+  args:
+    creates: /root/.helpforge_mysql_general_log
+
+- name: Mark MySQL general log as enabled
+  ansible.builtin.file:
+    path: /root/.helpforge_mysql_general_log
+    state: touch

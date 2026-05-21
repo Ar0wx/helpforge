@@ -1,0 +1,211 @@
+---
+- name: Install vsftpd
+  ansible.builtin.apt:
+    name: vsftpd
+    state: present
+
+- name: Configure anonymous FTP rabbit hole
+  ansible.builtin.copy:
+    dest: /etc/vsftpd.conf
+    content: |
+      listen=YES
+      listen_ipv6=NO
+
+      anonymous_enable=YES
+      local_enable=NO
+
+      write_enable=NO
+      anon_upload_enable=NO
+      anon_mkdir_write_enable=NO
+      anon_other_write_enable=NO
+
+      anon_root=/srv/ftp
+      no_anon_password=NO
+      ftpd_banner=ByteWise Solutions FTP
+
+      force_dot_files=YES
+
+      pasv_enable=YES
+      pasv_min_port=40000
+      pasv_max_port=40050
+      pasv_address={{ helpforge_ip }}
+
+      xferlog_enable=YES
+      xferlog_file=/var/log/vsftpd.log
+      xferlog_std_format=NO
+      log_ftp_protocol=YES
+      dual_log_enable=NO
+
+      secure_chroot_dir=/var/run/vsftpd/empty
+      pam_service_name=vsftpd
+    mode: '0644'
+  notify: restart vsftpd
+
+- name: Create FTP root
+  ansible.builtin.file:
+    path: /srv/ftp
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Create README decoy
+  ansible.builtin.copy:
+    dest: /srv/ftp/README.txt
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      ByteWise Solutions - Technician FTP Drop
+      ----------------------------------------
+      This share is used for diagnostic log bundles and short-term file
+      transfer between technicians. Do not store credentials, customer data,
+      or production configs here.
+
+      Last cleanup: 2024-03-12 by m.keller
+
+- name: Create expired credential decoy
+  ansible.builtin.copy:
+    dest: /srv/ftp/.old_creds.bak
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      # Backup of expired technician credentials, do NOT use
+      m.keller:OldHelpdesk2023
+
+- name: Build client_logs_2024.tar.gz with embedded wordlist
+  ansible.builtin.shell: |
+    set -e
+    BUILD_DIR=$(mktemp -d)
+    cd "$BUILD_DIR"
+    mkdir client_logs_2024
+
+    cat > client_logs_2024/router_syslog_acme.txt <<'LOGS'
+    [2024-02-11 03:14:22] router-acme: dhcp lease renewed for 10.20.30.41
+    [2024-02-11 03:21:08] router-acme: vpn tunnel stable, peer 198.51.100.7
+    [2024-02-11 09:45:33] router-acme: ipsec rekey successful
+    [2024-02-11 14:02:11] router-acme: wan link uptime 14d 02h
+    LOGS
+
+    cat > client_logs_2024/workstation_events_feb.csv <<'EVENTS'
+    timestamp,event_id,user,host,message
+    2024-02-11T07:42:01Z,4624,helpdesk,WKS-ACME-014,Logon Type 2 success
+    2024-02-11T07:55:18Z,4625,unknown,WKS-ACME-014,Logon failure - bad password
+    2024-02-11T08:03:44Z,4624,helpdesk,WKS-ACME-014,Logon Type 2 success
+    EVENTS
+
+    cat > common_passwords.txt <<'WORDS'
+    123456
+    123456789
+    12345678
+    password
+    qwerty
+    admin
+    letmein
+    welcome
+    monkey
+    dragon
+    football
+    baseball
+    shadow
+    master
+    sunshine
+    princess
+    iloveyou
+    trustno1
+    password1
+    Password1
+    Password123
+    Password2024
+    P@ssw0rd
+    P@ssw0rd!
+    ChangeMe
+    ChangeMe!
+    Welcome1
+    Welcome2024
+    Summer2023
+    Summer2024
+    Spring2024
+    Winter2024
+    Company2024
+    Support2024
+    Helpdesk2024
+    Admin2024!
+    WORDS
+
+    cat > helpforge_seed_words.txt <<'WORDS'
+    helpdesk
+    helpforge
+    HelpForge
+    bytewise
+    ByteWise
+    msp
+    technician
+    techops
+    Techops
+    TechOps
+    support
+    ticket
+    operations
+    Operations
+    ops
+    sysadmin
+    SysAdmin
+    admin
+    glpi
+    Glpi2024
+    ByteWiseSolutions
+    HelpForgePortal
+    OldHelpdesk
+    Keller
+    mkeller
+    m.keller
+    WORDS
+
+    {
+      cat common_passwords.txt
+      cat helpforge_seed_words.txt
+      while IFS= read -r word; do
+        [ -n "$word" ] || continue
+        for year in 2022 2023 2024 24; do
+          printf '%s\n' \
+            "${word}${year}" \
+            "${word}_${year}" \
+            "${word}-${year}" \
+            "${word}${year}!" \
+            "${word}_${year}!"
+        done
+        for suffix in '!' '!!' '123' '123!' '@123' '#2024' '_HelpForge24' '_ByteWise24'; do
+          printf '%s\n' "${word}${suffix}"
+        done
+      done < helpforge_seed_words.txt
+      printf '%s\n' TechOps_HelpForge24 OldHelpdesk2023
+    } | awk 'NF && !seen[$0]++' > candidate_wordlist.txt
+
+    python3 - <<'PY'
+    import random
+    from pathlib import Path
+
+    words = Path("candidate_wordlist.txt").read_text().splitlines()
+    random.Random(24032024).shuffle(words)
+    required = "TechOps_HelpForge24"
+    if required not in words:
+        words.append(required)
+    Path("client_logs_2024/helpforge_wordlist.txt").write_text("\n".join(words) + "\n")
+    PY
+
+    tar -czf /srv/ftp/client_logs_2024.tar.gz client_logs_2024/
+    chown root:root /srv/ftp/client_logs_2024.tar.gz
+    chmod 0644 /srv/ftp/client_logs_2024.tar.gz
+    touch /srv/ftp/.helpforge_wordlist_v2
+    cd /
+    rm -rf "$BUILD_DIR"
+  args:
+    creates: /srv/ftp/.helpforge_wordlist_v2
+
+- name: Start vsftpd
+  ansible.builtin.service:
+    name: vsftpd
+    state: started
+    enabled: yes

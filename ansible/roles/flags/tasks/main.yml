@@ -1,0 +1,16 @@
+---
+- name: Place user flag
+  ansible.builtin.copy:
+    dest: "/home/{{ techops_name }}/user.txt"
+    content: "{{ user_flag }}\n"
+    owner: "{{ techops_name }}"
+    group: "{{ techops_name }}"
+    mode: '0640'
+
+- name: Place root flag
+  ansible.builtin.copy:
+    dest: /root/root.txt
+    content: "{{ root_flag }}\n"
+    owner: root
+    group: root
+    mode: '0600'

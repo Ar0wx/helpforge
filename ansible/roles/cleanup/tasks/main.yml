@@ -1,0 +1,40 @@
+---
+- name: Restrict SSH to techops only for delivery
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^AllowUsers'
+    line: 'AllowUsers techops'
+
+- name: Lock vagrant build account
+  ansible.builtin.user:
+    name: vagrant
+    password_lock: yes
+    shell: /usr/sbin/nologin
+
+- name: Remove vagrant sudoers drop-in if present
+  ansible.builtin.file:
+    path: /etc/sudoers.d/vagrant
+    state: absent
+
+- name: Clear shell histories
+  ansible.builtin.shell: |
+    find /home /root -name ".bash_history"  -exec truncate -s 0 {} \;
+    find /home /root -name ".mysql_history" -exec truncate -s 0 {} \;
+    find /home /root -name ".lesshst"       -exec truncate -s 0 {} \;
+    rm -f /tmp/glpi-10.0.9.tgz
+  changed_when: false
+
+- name: Truncate build-time logs
+  ansible.builtin.shell: |
+    truncate -s 0 /var/log/apache2/access.log
+    truncate -s 0 /var/log/apache2/error.log
+    truncate -s 0 /var/log/apache2/helpforge-access.log 2>/dev/null || true
+    truncate -s 0 /var/log/apache2/helpforge-error.log 2>/dev/null || true
+    truncate -s 0 /var/log/auth.log
+    truncate -s 0 /var/log/vsftpd.log 2>/dev/null || true
+  changed_when: false
+
+- name: Restart SSH
+  ansible.builtin.service:
+    name: ssh
+    state: restarted

@@ -1,0 +1,57 @@
+---
+- name: Install UFW
+  ansible.builtin.apt:
+    name: ufw
+    state: present
+
+- name: UFW default policy - deny incoming
+  community.general.ufw:
+    direction: incoming
+    policy: deny
+
+- name: UFW default policy - allow outgoing
+  community.general.ufw:
+    direction: outgoing
+    policy: allow
+
+- name: Allow intended TCP ports
+  community.general.ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: tcp
+  loop:
+    - '21'
+    - '22'
+    - '80'
+    - '40000:40050'
+
+- name: Enable UFW
+  community.general.ufw:
+    state: enabled
+
+- name: Hide Apache version detail
+  ansible.builtin.lineinfile:
+    path: /etc/apache2/conf-enabled/security.conf
+    regexp: '^ServerTokens'
+    line: 'ServerTokens Prod'
+  notify: restart apache2
+
+- name: Disable Apache server signature
+  ansible.builtin.lineinfile:
+    path: /etc/apache2/conf-enabled/security.conf
+    regexp: '^ServerSignature'
+    line: 'ServerSignature Off'
+  notify: restart apache2
+
+- name: Hold all installed PHP 8.1 packages and challenge-relevant packages
+  ansible.builtin.shell: |
+    PHP_PKGS=$(dpkg -l 2>/dev/null | awk '/^ii.*php8\.1/ {print $2}' | xargs)
+    apt-mark hold $PHP_PKGS \
+        apache2 \
+        mysql-server-8.0 \
+        mysql-server-core-8.0 \
+        vsftpd \
+        openssh-server \
+        sudo \
+        less
+  changed_when: false

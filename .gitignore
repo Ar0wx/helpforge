@@ -1,0 +1,8 @@
+.vagrant/
+.secrets/
+*.box
+*.ova
+*.log
+*.zip
+client_logs_2024/
+client_logs_2024.tar.gz

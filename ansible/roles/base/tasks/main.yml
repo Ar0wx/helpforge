@@ -1,0 +1,84 @@
+---
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: yes
+    cache_valid_time: 3600
+
+- name: Set hostname
+  ansible.builtin.hostname:
+    name: helpforge
+
+- name: Set timezone to UTC
+  community.general.timezone:
+    name: UTC
+
+- name: Install base packages
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+      - git
+      - less
+      - net-tools
+      - openssh-server
+      - python3-passlib
+      - python3-pymysql
+      - unzip
+      - vim
+      - wget
+    state: present
+
+- name: Ensure 127.0.1.1 host entry is exactly helpforge
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '^127\.0\.1\.1\s+'
+    line: '127.0.1.1 helpforge'
+    state: present
+
+- name: Disable unattended-upgrades if installed
+  ansible.builtin.systemd:
+    name: unattended-upgrades
+    enabled: no
+    state: stopped
+  ignore_errors: yes
+
+- name: Disable apt periodic timers
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: no
+    state: stopped
+    masked: yes
+  loop:
+    - apt-daily.timer
+    - apt-daily-upgrade.timer
+    - apt-daily.service
+    - apt-daily-upgrade.service
+  ignore_errors: yes
+
+- name: Disable apt periodic upgrades in config
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    content: |
+      APT::Periodic::Update-Package-Lists "0";
+      APT::Periodic::Unattended-Upgrade "0";
+    mode: '0644'
+
+- name: Disable IPv6 if requested
+  ansible.posix.sysctl:
+    name: "{{ item }}"
+    value: '1'
+    state: present
+    sysctl_set: yes
+    reload: yes
+  loop:
+    - net.ipv6.conf.all.disable_ipv6
+    - net.ipv6.conf.default.disable_ipv6
+  when: disable_ipv6 | default(false) | bool
+
+- name: Set MOTD
+  ansible.builtin.copy:
+    dest: /etc/motd
+    content: |
+      ByteWise Solutions - HelpForge
+      Authorized technician access only.
+    mode: '0644'
