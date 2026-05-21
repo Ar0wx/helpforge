@@ -55,6 +55,14 @@ The repository includes an autosolve script for the final solution chain:
 ./solve.sh 192.168.56.102
 ```
 
+On native Windows, install the SSH dependency first and run the Python script
+directly:
+
+```powershell
+py -m pip install paramiko
+py autosolve.py 192.168.56.102
+```
+
 The script performs the intended path automatically: GLPI CVE exploitation,
 database credential extraction, `techops` hash recovery, FTP wordlist cracking,
 SSH login, and `sudo less` privilege escalation.
