@@ -47,6 +47,33 @@ The audit role enables additional logging for detection-engineering exercises:
 ./audit.sh
 ```
 
+## Secure Everything Else / Version Stability
+
+The challenge intentionally keeps GLPI at version 10.0.9 for
+`CVE-2023-42802`. GLPI is installed from the fixed upstream release archive and
+is not managed through `apt`, so normal package upgrades cannot silently replace
+it with a patched GLPI version.
+
+The provisioning also disables automatic package upgrades:
+
+- `unattended-upgrades` is stopped and disabled.
+- `apt-daily` and `apt-daily-upgrade` timers are disabled and masked.
+- `/etc/apt/apt.conf.d/20auto-upgrades` disables periodic apt updates and
+  unattended upgrades.
+
+The hardening role then marks challenge-relevant packages as held with
+`apt-mark hold`, including Apache, PHP 8.1 packages, MySQL, vsftpd, OpenSSH,
+sudo, and less. This prevents an accidental `apt upgrade` from changing the
+runtime components that the challenge depends on.
+
+Manual validation commands inside the VM:
+
+```bash
+apt-mark showhold
+systemctl is-enabled unattended-upgrades || true
+systemctl is-enabled apt-daily.timer apt-daily-upgrade.timer || true
+```
+
 ## Final Cleanup Before Export
 
 Run cleanup only after validation and before exporting or submitting the final
