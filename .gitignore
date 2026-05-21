@@ -4,6 +4,7 @@
 *.ova
 *.log
 *.zip
+/shell.php
 __pycache__/
 *.pyc
 client_logs_2024/

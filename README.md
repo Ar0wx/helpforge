@@ -93,8 +93,10 @@ recovery, SSH login, and the final privilege escalation.
 
 The manual GLPI PoC files are included as `rce.py` and `shell.php.old`.
 The payload uses the `.old` extension because some upload systems reject ZIP
-archives containing `.php` files. `rce.py` automatically uses `shell.php.old`
-when `shell.php` is not present.
+archives containing `.php` files. During `./build.sh` or `vagrant up`, the
+repository creates a local working copy named `shell.php` from `shell.php.old`.
+The generated `shell.php` is ignored by Git and should not be included in the
+submission ZIP.
 
 ## Scope
 
