@@ -1,0 +1,11 @@
+step,phase,action,mitre_technique,start_ms,end_ms,duration_ms,log_source
+1,Recon,nmap service scan,T1046,1780339389618,1780339407155,17537,/var/log/syslog
+2,Enumeration,HTTP/GLPI fingerprinting,T1595,1780339407155,1780339407171,16,/var/log/apache2/access.log
+3,Enumeration,FTP anonymous enumeration,T1083,1780339407171,1780339407179,8,/var/log/vsftpd.log
+4,Exploitation,GLPI CVE-2023-42802 exploitation,T1190;T1505.003,1780339407179,1780339407207,28,/var/log/apache2/access.log
+5,Post-Exploitation,Read config_db.php credentials,T1552.001,1780339407207,1780339407211,4,/var/log/apache2/access.log
+6,Post-Exploitation,Query glpi_users bcrypt hash,T1005,1780339407211,1780339407221,10,/var/log/mysql/general.log
+7,Credential Access,Offline bcrypt password cracking,T1110.002,1780339407221,1780339410431,3210,offline
+8,Lateral Movement,SSH password reuse as techops,T1078,1780339410434,1780339412132,1698,/var/log/auth.log
+9,Privilege Escalation,sudo -l enumeration,T1069.001,1780339412132,1780339413496,1364,/var/log/auth.log
+10,Privilege Escalation,sudo less shell escape to root,T1548.003,1780339413496,1780339415263,1767,/var/log/auth.log

