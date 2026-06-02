@@ -59,6 +59,14 @@ curl -I http://192.168.56.102/
 nmap -sV -p21,22,80,3306 192.168.56.102
 ```
 
+## Logging / Observability
+
+The provisioning configures all logging needed for the detection exercises
+(auditd file/exec watches, MySQL general query log, UFW firewall logging). This
+runs automatically during `vagrant up` — after provisioning the VM is ready for
+log collection with no manual steps. See `PROVISIONING.md` for the readiness
+check and details.
+
 ## Fresh Rebuild
 
 To recreate the VM from scratch:

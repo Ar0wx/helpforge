@@ -39,12 +39,36 @@ curl -I http://192.168.56.102/
 nmap -sV -p21,22,80,3306 192.168.56.102
 ```
 
-## Optional Detection Setup
+## Logging / Observability (automatic)
 
-The audit role enables additional logging for detection-engineering exercises:
+The `audit` role configures the additional logging and observability sources
+needed for the detection-engineering exercises (Chapter 7). It runs
+**automatically as part of `vagrant up`**, so after provisioning the VM is ready
+for log collection with **no manual steps**. It configures:
+
+- **auditd** with rules in `/etc/audit/rules.d/helpforge.rules`:
+  - read watch on `/var/www/glpi/config/config_db.php` (`-k glpi_dbconfig_read`)
+  - root `execve` logging (`-k root_exec`)
+  - write/attribute watches on `/etc/sudoers` and `/etc/sudoers.d/`
+- **MySQL general query log** at `/var/log/mysql/general.log`
+  (`general_log = ON`)
+
+UFW firewall logging (used to observe the recon/port-scan step) is already
+enabled by the `harden` role.
+
+Re-applying only the logging configuration on an already-running VM (optional):
 
 ```bash
 ./audit.sh
+```
+
+Quick readiness check after `vagrant up` (expected: auditd active, rules
+loaded, general log present):
+
+```bash
+systemctl is-active auditd
+auditctl -l
+ls -l /var/log/mysql/general.log
 ```
 
 ## Autosolve

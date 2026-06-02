@@ -16,7 +16,11 @@
     - harden
     - role: verify
       tags: ['verify', 'never']
+    # Logging / observability: runs automatically on `vagrant up` so the VM is
+    # ready for log collection with no manual steps (Chapter 7 instrumentation).
+    # The 'audit' tag is kept so the role can still be re-applied on its own via
+    # ./audit.sh, but it is no longer gated behind 'never'.
     - role: audit
-      tags: ['audit', 'never']
+      tags: ['audit']
     - role: cleanup
       tags: ['cleanup', 'never']
