@@ -15,6 +15,9 @@
       -w /etc/sudoers      -p wa -k sudoers_change
       -w /etc/sudoers.d/   -p wa -k sudoers_change
       -a always,exit -F arch=b64 -S execve -F euid=0 -k root_exec
+      # Catch every sudo invocation (incl. `sudo -l`, euid != 0) so attack step 9
+      # is visible — closes the matrix gap and satisfies Chapter 8 Exercise 4.
+      -w /usr/bin/sudo -p x -k sudo_exec
   notify: restart auditd
 
 - name: Enable auditd at boot
@@ -23,7 +26,20 @@
     state: started
     enabled: yes
 
-- name: Enable MySQL general query log
+# Persist the general query log so it survives a mysqld restart / VM reboot
+# (SET GLOBAL alone is runtime-only and would silently turn off, leaving Filebeat
+# tailing an empty file).
+- name: Persist MySQL general query log across restarts
+  ansible.builtin.copy:
+    dest: /etc/mysql/mysql.conf.d/helpforge-general-log.cnf
+    mode: "0644"
+    content: |
+      [mysqld]
+      general_log = 1
+      general_log_file = /var/log/mysql/general.log
+  notify: restart mysql
+
+- name: Enable MySQL general query log (immediate, no restart needed)
   ansible.builtin.shell: |
     mysql -u root -p'{{ mysql_root_password }}' <<'SQL'
     SET GLOBAL general_log_file='/var/log/mysql/general.log';

@@ -1,0 +1,71 @@
+---
+# SIEM integration (Chapter 8) for the HelpForge target VM.
+# Installs + Fleet-enrolls the Elastic Agent (System/Apache/MySQL integrations
+# come from HelpForge-Policy) and a standalone Filebeat for the non-Fleet
+# sources: MySQL general query log, auditd, vsftpd.
+#
+# The whole role is a NO-OP unless a Fleet enrollment token is provided, so the
+# challenge stays standalone when shipped without the ELK server. Bring up
+# ../elastic-stack first; its token is read by ../helpforge/Vagrantfile.
+- name: SIEM integration
+  when: fleet_enrollment_token | default('') | length > 0
+  block:
+    - name: Add Elastic GPG key
+      ansible.builtin.shell: |
+        curl -fsSL https://artifacts.elastic.co/GPG-KEY-elasticsearch \
+          | gpg --dearmor -o /usr/share/keyrings/elasticsearch-keyring.gpg
+      args:
+        creates: /usr/share/keyrings/elasticsearch-keyring.gpg
+
+    - name: Add Elastic apt repository
+      ansible.builtin.apt_repository:
+        repo: "deb [signed-by=/usr/share/keyrings/elasticsearch-keyring.gpg] https://artifacts.elastic.co/packages/8.x/apt stable main"
+        state: present
+        filename: "elastic-8.x"
+
+    - name: Install elastic-agent and filebeat {{ elastic_version }}
+      ansible.builtin.apt:
+        name:
+          - "elastic-agent={{ elastic_version }}"
+          - "filebeat={{ elastic_version }}"
+        state: present
+        update_cache: yes
+
+    # --delay-enroll writes the config now and completes enrollment on first
+    # service start, so the ELK server need not be reachable at this exact moment.
+    - name: Enroll and start elastic-agent (Fleet-managed)
+      ansible.builtin.shell: >
+        elastic-agent enroll
+        --url={{ fleet_server_url }}
+        --enrollment-token={{ fleet_enrollment_token }}
+        --insecure
+        --delay-enroll
+        --force
+        && systemctl enable --now elastic-agent
+        && touch /opt/.helpforge_agent_enrolled
+      args:
+        creates: /opt/.helpforge_agent_enrolled
+
+    - name: Deploy standalone Filebeat config (MySQL query log, auditd, vsftpd)
+      ansible.builtin.template:
+        src: filebeat.yml.j2
+        dest: /etc/filebeat/filebeat.yml
+        owner: root
+        group: root
+        mode: "0644"
+      notify: restart filebeat
+
+    - name: Enable and start Filebeat
+      ansible.builtin.systemd:
+        name: filebeat
+        state: started
+        enabled: yes
+        daemon_reload: yes
+
+- name: SIEM integration skipped (no Fleet enrollment token)
+  ansible.builtin.debug:
+    msg: >-
+      No fleet_enrollment_token set — skipping Elastic Agent / Filebeat.
+      Bring up ../elastic-stack (vagrant up) first, then re-run
+      `vagrant provision` here to enroll this VM into the SIEM.
+  when: fleet_enrollment_token | default('') | length == 0

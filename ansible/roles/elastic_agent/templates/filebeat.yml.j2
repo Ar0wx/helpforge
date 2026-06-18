@@ -1,0 +1,61 @@
+# Standalone Filebeat for HelpForge sources without a Fleet integration.
+# Runs in DATA-STREAM mode: each input tags its events with data_stream.* and the
+# output index is composed from those fields, so Filebeat writes with
+# op_type:create into the data streams pre-created by the elastic-stack
+# siem_content role (logs-mysql.query-default, logs-vsftpd.log-default,
+# logs-auditd.log-default). Parsing is applied server-side via each data
+# stream's default ingest pipeline. Both this Filebeat and the Fleet-managed
+# Elastic Agent write to the same cluster and appear in the same Kibana logs-*
+# view, all carrying data_stream.dataset.
+filebeat.inputs:
+  - type: filestream
+    id: mysql-query-log
+    enabled: true
+    paths:
+      - /var/log/mysql/general.log
+    tags: [mysql, query]
+    fields_under_root: true
+    fields:
+      data_stream.type: logs
+      data_stream.dataset: mysql.query
+      data_stream.namespace: default
+
+  - type: filestream
+    id: auditd-log
+    enabled: true
+    paths:
+      - /var/log/audit/audit.log
+    tags: [audit, linux]
+    fields_under_root: true
+    fields:
+      data_stream.type: logs
+      data_stream.dataset: auditd.log
+      data_stream.namespace: default
+
+  - type: filestream
+    id: vsftpd-log
+    enabled: true
+    paths:
+      - /var/log/vsftpd.log
+    tags: [ftp, vsftpd]
+    fields_under_root: true
+    fields:
+      data_stream.type: logs
+      data_stream.dataset: vsftpd.log
+      data_stream.namespace: default
+
+output.elasticsearch:
+  hosts: ["http://{{ elk_ip }}:9200"]
+  username: elastic
+  password: "{{ elastic_password }}"
+  # Compose the data-stream name from the per-input data_stream.* fields. A
+  # resolved name that matches an existing data stream makes Filebeat use
+  # op_type:create (required for data streams).
+  index: "%{[data_stream.type]}-%{[data_stream.dataset]}-%{[data_stream.namespace]}"
+
+# Don't let standalone Filebeat install/clobber templates or ILM — the data
+# streams and their default pipelines are managed by the ELK server.
+setup.template.enabled: false
+setup.ilm.enabled: false
+
+logging.level: warning

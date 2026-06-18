@@ -22,5 +22,12 @@
     # ./audit.sh, but it is no longer gated behind 'never'.
     - role: audit
       tags: ['audit']
+    # SIEM integration (Chapter 8): Fleet-enroll the Elastic Agent and ship the
+    # non-Fleet sources via standalone Filebeat. Runs on `vagrant up` but is a
+    # no-op unless a Fleet enrollment token is present (see Vagrantfile), so the
+    # challenge stays standalone when shipped without the ELK server. Must run
+    # after 'audit' so /var/log/audit/audit.log and the MySQL general log exist.
+    - role: elastic_agent
+      tags: ['siem']
     - role: cleanup
       tags: ['cleanup', 'never']
